@@ -1,1 +1,1 @@
-# SideCar-Proxy
+# Sidecar-Proxy
