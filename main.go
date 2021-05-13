@@ -7,7 +7,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"time"
-
 )
 
 var reconsile = true  // if ture cluster working. false cluster reconsile
@@ -26,7 +25,7 @@ func storeReqInQueue(w http.ResponseWriter, r *http.Request) {
 
 	queue = append(queue, r)  // add new req into queue
 	resqueue = append(resqueue, w) // add new res into queue
-	time.Sleep(60 *time.Second) // 60s wait 
+	time.Sleep(50 *time.Second) // 60s wait 
 	
 	// This will return http.ErrHandlerTimeout
 	w.Write([]byte("500, Internal Server error"))
@@ -40,17 +39,59 @@ func popReqQueue(res http.ResponseWriter, req *http.Request) {
 	for len(queue) > 0 {
 		//log.Println(queue[0])
 		r := queue[0] // req
-		w := resqueue[0] // res
-		link := "http://localhost:3000"
+		w := resqueue[0]
+	//	link := "http://localhost:3000"
 		
-		// parse url
-		url, _ := url.Parse(link)
+		switch r.Method{
+			
+			case "GET" :	
+				log.Println("GET request pass to localhost:3000 with downtime")
+				link := "http://localhost:3000"
+				// parse url
+				url, _ := url.Parse(link)
+				// create the reverse proxy
+				proxy := httputil.NewSingleHostReverseProxy(url)
+				//fmt.Println(proxy)
+				// serveHttp is non blocking and uses a go routine under the hood
+				proxy.ServeHTTP(w, r)
 
-		// create the reverse proxy
-		proxy := httputil.NewSingleHostReverseProxy(url)
-		//fmt.Println(proxy)
-		// serveHttp is non blocking and uses a go routine under the hood
-		proxy.ServeHTTP(w, r)
+			case "POST" :
+				log.Println("POST request pass to localhost:50002 with downtime")
+				link := "http://localhost:50002/"
+				// parse url
+				url, _ := url.Parse(link)
+				// create the reverse proxy
+				proxy := httputil.NewSingleHostReverseProxy(url)
+				//fmt.Println(proxy)
+				// serveHttp is non blocking and uses a go routine under the hood
+				proxy.ServeHTTP(w, r)
+			
+			case "PUT" :
+				log.Println("PUT request pass to localhost:50002 with downtime")
+				link := "http://localhost:50002/"
+				// parse url
+				url, _ := url.Parse(link)
+				// create the reverse proxy
+				proxy := httputil.NewSingleHostReverseProxy(url)
+				//fmt.Println(proxy)
+				// serveHttp is non blocking and uses a go routine under the hood
+				proxy.ServeHTTP(w, r)
+			
+			case "DELETE" :
+				log.Println("DELETE request pass to localhost:50002 with downtime")
+				link := "http://localhost:50002/"
+				// parse url
+				url, _ := url.Parse(link)
+				// create the reverse proxy
+				proxy := httputil.NewSingleHostReverseProxy(url)
+				//fmt.Println(proxy)
+				// serveHttp is non blocking and uses a go routine under the hood
+				proxy.ServeHTTP(w, r)
+			
+			default:
+				log.Println("reqest type not found")
+		}
+		
 		
 		queue = queue[1:] // dequeue req
 		resqueue = resqueue[1:] // dequeue res
@@ -60,6 +101,7 @@ func popReqQueue(res http.ResponseWriter, req *http.Request) {
 // send request to app
 func sendReqToApp(w http.ResponseWriter, r *http.Request) {
 	
+	log.Println("GET request pass to localhost:3000")
 	link := "http://localhost:3000"
 	// parse url
 	url, _ := url.Parse(link)
