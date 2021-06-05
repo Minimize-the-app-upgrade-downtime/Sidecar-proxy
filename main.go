@@ -101,7 +101,8 @@ func popReqQueue(res http.ResponseWriter, req *http.Request) {
 // send request to app
 func sendReqToApp(w http.ResponseWriter, r *http.Request) {
 	
-	log.Println("GET request pass to localhost:3000")
+	log.Println("Request pass to localhost:3000")
+	//log.Println(r);
 	link := "http://localhost:3000"
 	// parse url
 	url, _ := url.Parse(link)
@@ -132,6 +133,7 @@ func main() {
 	h := &Handler{} // call the serverHTTP
 	// response msg
 	http.Handle("/", http.TimeoutHandler(h, 65*time.Second, "500, Internal error"))
+	http.Handle("epfForm", http.TimeoutHandler(h, 65*time.Second, "500, Internal error"))
 	
 	// cluster is reconsile . store the request in the queue
 	h1 := func (_ http.ResponseWriter, _ *http.Request)  {
