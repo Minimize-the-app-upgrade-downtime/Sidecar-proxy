@@ -1,7 +1,8 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -9,148 +10,100 @@ import (
 	"time"
 )
 
-var reconsile = true  // if ture cluster working. false cluster reconsile
-var queue []*http.Request
-var resqueue []http.ResponseWriter 
+var expectedSleepTime = 60 * time.Second
+var isUpdated = true // Nothing update going on.
 
-
-type Handler struct {
+type handle struct {
+	reqQueue  []http.Request
+	respQueue []http.ResponseWriter
 }
 
-
-// request store in queue cluster is updating
-func storeReqInQueue(w http.ResponseWriter, r *http.Request) {
-	
-	log.Printf("Request pushed into queue[%d]", len(queue))
-
-	queue = append(queue, r)  // add new req into queue
-	resqueue = append(resqueue, w) // add new res into queue
-	time.Sleep(50 *time.Second) // 60s wait 
-	
-	// This will return http.ErrHandlerTimeout
-	w.Write([]byte("500, Internal Server error"))
+type ESleepTime struct {
+	Etime int
 }
 
-
-// pop request queue until queue is empty
-func popReqQueue(res http.ResponseWriter, req *http.Request) {
-	
-
-	for len(queue) > 0 {
-		//log.Println(queue[0])
-		r := queue[0] // req
-		w := resqueue[0]
-	//	link := "http://localhost:3000"
-		
-		switch r.Method{
-			
-			case "GET" :	
-				log.Println("GET request pass to localhost:3000 with downtime")
-				link := "http://localhost:3000"
-				// parse url
-				url, _ := url.Parse(link)
-				// create the reverse proxy
-				proxy := httputil.NewSingleHostReverseProxy(url)
-				//fmt.Println(proxy)
-				// serveHttp is non blocking and uses a go routine under the hood
-				proxy.ServeHTTP(w, r)
-
-			case "POST" :
-				log.Println("POST request pass to localhost:50002 with downtime")
-				link := "http://localhost:50002/"
-				// parse url
-				url, _ := url.Parse(link)
-				// create the reverse proxy
-				proxy := httputil.NewSingleHostReverseProxy(url)
-				//fmt.Println(proxy)
-				// serveHttp is non blocking and uses a go routine under the hood
-				proxy.ServeHTTP(w, r)
-			
-			case "PUT" :
-				log.Println("PUT request pass to localhost:50002 with downtime")
-				link := "http://localhost:50002/"
-				// parse url
-				url, _ := url.Parse(link)
-				// create the reverse proxy
-				proxy := httputil.NewSingleHostReverseProxy(url)
-				//fmt.Println(proxy)
-				// serveHttp is non blocking and uses a go routine under the hood
-				proxy.ServeHTTP(w, r)
-			
-			case "DELETE" :
-				log.Println("DELETE request pass to localhost:50002 with downtime")
-				link := "http://localhost:50002/"
-				// parse url
-				url, _ := url.Parse(link)
-				// create the reverse proxy
-				proxy := httputil.NewSingleHostReverseProxy(url)
-				//fmt.Println(proxy)
-				// serveHttp is non blocking and uses a go routine under the hood
-				proxy.ServeHTTP(w, r)
-			
-			default:
-				log.Println("reqest type not found")
-		}
-		
-		
-		queue = queue[1:] // dequeue req
-		resqueue = resqueue[1:] // dequeue res
-	}
-}
-
-// send request to app
-func sendReqToApp(w http.ResponseWriter, r *http.Request) {
-	
-	log.Println("Request pass to localhost:3000")
-	//log.Println(r);
-	link := "http://localhost:3000"
-	// parse url
-	url, _ := url.Parse(link)
-
-	// create the reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(url)
-	//fmt.Println(proxy)
-	// serveHttp is non blocking and uses a go routine under the hood
-	proxy.ServeHTTP(w, r)
-
-}
-
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-
-	if reconsile {
-		// cluster  not reconsile. request send to  pod
-		sendReqToApp(w, r)
+func (h *handle) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if isUpdated {
+		// redirect to application
+		link := "http://localhost:3000"
+		url, _ := url.Parse(link)
+		proxy := httputil.NewSingleHostReverseProxy(url) // create a reverse proxy
+		proxy.ServeHTTP(w, r)
 	} else {
-		// cluster is reconsile. request store in the queue 
-		storeReqInQueue(w, r)
+		// store in the Queue, Update is going on.
+		log.Printf("Request pushed into reqQueue[%d]", len(h.reqQueue))
+		h.reqQueue = append(h.reqQueue, *r)
+		h.respQueue = append(h.respQueue, w)
+		time.Sleep(expectedSleepTime)
+		w.Write([]byte("500, Internal Server error"))
 	}
+}
 
+// dequeue the request and send to application
+func (h *handle) deQueue(w http.ResponseWriter, r *http.Request) {
+	log.Println("Dequeue start...")
+	for len(h.reqQueue) > 0 {
+
+		req := h.reqQueue[0]
+		resp := h.respQueue[0]
+		// accoding to request type divided
+		switch req.Method {
+		case "GET":
+			log.Println("GET request pass to port:3000")
+			link := "http://localhost:3000" + req.URL.String()
+			r, err := http.Get(link)
+			if err != nil {
+				log.Println("GET method request err : ", err)
+			}
+			body, err := ioutil.ReadAll(r.Body)
+			if err != nil {
+				log.Println("response body read error : ", err)
+			}
+			resp.Write(body)
+
+		case "POST", "PUT", "DELETE":
+			log.Println("Request pass to port: 50002")
+			link := "http://localhost:50002"
+			url, _ := url.Parse(link)
+			proxy := httputil.NewSingleHostReverseProxy(url)
+			proxy.ServeHTTP(resp, &req)
+		default:
+			log.Println("Unauthoried request!!. ", req.Method)
+		}
+		h.reqQueue = h.reqQueue[1:]   // remove request
+		h.respQueue = h.respQueue[1:] // remove response
+	}
 }
 
 func main() {
+	log.Println("server is up.")
+	h := &handle{}
+	http.Handle("/", http.TimeoutHandler(h, (expectedSleepTime+10*time.Second), "500, Internal error"))
 
-	fmt.Println("Server is up!.")
-	h := &Handler{} // call the serverHTTP
-	// response msg
-	http.Handle("/", http.TimeoutHandler(h, 65*time.Second, "500, Internal error"))
-	http.Handle("epfForm", http.TimeoutHandler(h, 65*time.Second, "500, Internal error"))
-	
-	// cluster is reconsile . store the request in the queue
-	h1 := func (_ http.ResponseWriter, _ *http.Request)  {
-		reconsile = false
-		fmt.Println("Cluster is Reconsile : ",reconsile)
-	}
-	http.HandleFunc("/cluster_Reconsile_Enable",h1)
+	http.HandleFunc("/updateStarted", func(_ http.ResponseWriter, _ *http.Request) {
+		isUpdated = false
+		log.Println("Ready for the updated Request enQueue", isUpdated)
+	})
+	http.HandleFunc("/updateFinished", func(resp http.ResponseWriter, req *http.Request) {
+		isUpdated = true
+		log.Println("Update finished successfully! deQueue is started. ", isUpdated)
+		h.deQueue(resp, req)
+	})
+	http.HandleFunc("/expcedTime", func(resp http.ResponseWriter, req *http.Request) {
 
-	// cluster reconsile . working properly.
-	h2 := func (res http.ResponseWriter, req *http.Request)  {
-		reconsile = true
-		fmt.Println("Cluster Reconsile Finished : " ,reconsile)
-		popReqQueue(res,req)
-	}
-	http.HandleFunc("/cluster_Reconsile_Disable",h2)
-
-	// listen server port 50000
+		reqBody, err := ioutil.ReadAll(req.Body)
+		defer req.Body.Close()
+		if err != nil {
+			log.Println("req body read error : ", err)
+		}
+		log.Println("read req body : ", string(reqBody))
+		var t ESleepTime
+		err = json.Unmarshal(reqBody, &t)
+		if err != nil {
+			log.Println("Unmarshal error : ", err)
+		}
+		expectedSleepTime = time.Duration(t.Etime) * time.Second
+		log.Println("Expected Update time : ", expectedSleepTime)
+	})
 	http.ListenAndServe(":50000", nil)
-
 }
