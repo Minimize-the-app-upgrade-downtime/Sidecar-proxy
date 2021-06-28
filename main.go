@@ -8,10 +8,12 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"time"
+	"context"
 )
 
 var expectedSleepTime = 60 * time.Second
 var isUpdated = true // Nothing update going on.
+var ctx , cancel = context.WithCancel(context.Background())
 
 type handle struct {
 	reqQueue  []http.Request
@@ -34,8 +36,13 @@ func (h *handle) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Request pushed into reqQueue[%d]", len(h.reqQueue))
 		h.reqQueue = append(h.reqQueue, *r)
 		h.respQueue = append(h.respQueue, w)
-		time.Sleep(expectedSleepTime)
-		w.Write([]byte("500, Internal Server error"))
+		select{
+		case <- ctx.Done():
+		case <- time.After(expectedSleepTime):
+			w.Write([]byte("500, Internal Server error"))
+		}
+		//time.Sleep(expectedSleepTime)
+		w.Write([]byte(""))
 	}
 }
 
@@ -72,7 +79,11 @@ func (h *handle) deQueue(w http.ResponseWriter, r *http.Request) {
 		}
 		h.reqQueue = h.reqQueue[1:]   // remove request
 		h.respQueue = h.respQueue[1:] // remove response
+		
 	}
+	// cancel the context then create new context
+	cancel()
+	ctx , cancel = context.WithCancel(context.Background())
 }
 
 func main() {
@@ -88,6 +99,7 @@ func main() {
 		isUpdated = true
 		log.Println("Update finished successfully! deQueue is started. ", isUpdated)
 		h.deQueue(resp, req)
+		
 	})
 	http.HandleFunc("/expcedTime", func(resp http.ResponseWriter, req *http.Request) {
 
