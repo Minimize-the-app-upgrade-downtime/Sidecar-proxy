@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io/ioutil"
 	"log"
@@ -8,12 +9,11 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"time"
-	"context"
 )
 
 var expectedSleepTime = 60 * time.Second
 var isUpdated = true // Nothing update going on.
-var ctx , cancel = context.WithCancel(context.Background())
+var ctx, cancel = context.WithCancel(context.Background())
 
 type handle struct {
 	reqQueue  []http.Request
@@ -27,19 +27,36 @@ type ESleepTime struct {
 func (h *handle) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if isUpdated {
 		// redirect to application
-		link := "http://localhost:3000"
+		link := "http://app-svc:3000"
+		log.Println("link : ", link)
 		url, _ := url.Parse(link)
 		proxy := httputil.NewSingleHostReverseProxy(url) // create a reverse proxy
 		proxy.ServeHTTP(w, r)
 	} else {
-		// store in the Queue, Update is going on.
-		log.Printf("Request pushed into reqQueue[%d]", len(h.reqQueue))
-		h.reqQueue = append(h.reqQueue, *r)
-		h.respQueue = append(h.respQueue, w)
-		select{
-		case <- ctx.Done():
-		case <- time.After(expectedSleepTime):
-			w.Write([]byte("500, Internal Server error"))
+
+		log.Println("request body : ", r.Body)
+		log.Println("method : ", r.Method)
+		log.Println("url : ", r.URL)
+		log.Println("Proto : ", r.Proto)
+		log.Println("Host : ", r.Host)
+		headers := r.Header
+		val, ok := headers["Authorization"]
+		if ok && val[0] == "EPF" {
+			// store in the Queue, Update is going on.
+			log.Printf("Request pushed into enQueue[%d]", len(h.reqQueue))
+			h.reqQueue = append(h.reqQueue, *r)
+			h.respQueue = append(h.respQueue, w)
+			select {
+			case <-ctx.Done():
+			case <-time.After(expectedSleepTime):
+				w.Write([]byte("500, Internal Server error"))
+			}
+		} else {
+			link := "http://app-svc:3000"
+			log.Println("link : ", link)
+			url, _ := url.Parse(link)
+			proxy := httputil.NewSingleHostReverseProxy(url) // create a reverse proxy
+			proxy.ServeHTTP(w, r)
 		}
 		//time.Sleep(expectedSleepTime)
 		w.Write([]byte(""))
@@ -57,7 +74,7 @@ func (h *handle) deQueue(w http.ResponseWriter, r *http.Request) {
 		switch req.Method {
 		case "GET":
 			log.Println("GET request pass to port:3000")
-			link := "http://localhost:3000" + req.URL.String()
+			link := "http://app-svc:3000" + req.URL.String()
 			r, err := http.Get(link)
 			if err != nil {
 				log.Println("GET method request err : ", err)
@@ -70,7 +87,7 @@ func (h *handle) deQueue(w http.ResponseWriter, r *http.Request) {
 
 		case "POST", "PUT", "DELETE":
 			log.Println("Request pass to port: 50002")
-			link := "http://localhost:50002"
+			link := "http://app-svc:50002"
 			url, _ := url.Parse(link)
 			proxy := httputil.NewSingleHostReverseProxy(url)
 			proxy.ServeHTTP(resp, &req)
@@ -79,15 +96,16 @@ func (h *handle) deQueue(w http.ResponseWriter, r *http.Request) {
 		}
 		h.reqQueue = h.reqQueue[1:]   // remove request
 		h.respQueue = h.respQueue[1:] // remove response
-		
+
 	}
 	// cancel the context then create new context
 	cancel()
-	ctx , cancel = context.WithCancel(context.Background())
+	ctx, cancel = context.WithCancel(context.Background())
 }
 
 func main() {
 	log.Println("server is up.")
+
 	h := &handle{}
 	http.Handle("/", http.TimeoutHandler(h, (expectedSleepTime+10*time.Second), "500, Internal error"))
 
@@ -99,7 +117,7 @@ func main() {
 		isUpdated = true
 		log.Println("Update finished successfully! deQueue is started. ", isUpdated)
 		h.deQueue(resp, req)
-		
+
 	})
 	http.HandleFunc("/expcedTime", func(resp http.ResponseWriter, req *http.Request) {
 
